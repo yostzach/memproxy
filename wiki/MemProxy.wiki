@@ -1,0 +1,16 @@
+A proxy application that caches data in memcached.
+
+= Introduction =
+
+MemProxy is a simple (bet very powerful) PHP script that proxies web requests
+and stores the contents in memcached.  By being a full proxy, it allows the
+proxy servers to avoid heavy application level code.  This makes it very fast
+and efficient.  It also allows for a very simple set up on dedicated proxy
+servers.  Configurations for Apache and nginx are included in this
+documentation.
+
+= Requirements =
+
+    * PHP 5.2 with the PECL/memcache extension.
+    * A web server that has rewrite abilities. Apache and Nginx examples provided.
+    * memcached
