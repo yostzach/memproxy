@@ -199,9 +199,7 @@ PHP Example:
 {{{
     header("Cache-Control: max-age=300");
 }}}
-To have a piece of content never by cached, simple set the max-age to 0.
-There is currently no way to have an object stored forever.
-
+If a particular piece of content should not be cached, set themax-age to 0.  There is currently no way to have an object stored forever.
 
 = Sending commands to the proxy =
 
