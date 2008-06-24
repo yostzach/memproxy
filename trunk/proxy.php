@@ -245,7 +245,7 @@ if(DEBUG){
 
     // add debug information to the end of HTML documents
     if(strpos($body, "</body>")!==false){
-        $body = str_replace("</body>", "Via MemProxy!<br />$debug</body>", $body);
+        $body = str_replace("</body>", "Via MemProxy!<br />".nl2br($debug)."</body>", $body);
     }
 }
 
@@ -288,6 +288,11 @@ function fetch_document($path, $primary_request=false) {
     $document = false;
 
     $page_key = "mem_proxy_".$_SERVER["HTTP_HOST"].$path;
+
+    // if the key is over 250, we need to make it shorter as best we can
+    if(strlen($page_key) > 250){
+        $page_key = substr($page_key, 0, 210).sha1(substr($page_key, 211));
+    }
 
     // only cache GET requests
     if($primary_request && $_SERVER["REQUEST_METHOD"]!="GET"){
@@ -609,7 +614,12 @@ function fetch_document($path, $primary_request=false) {
             if(DEBUG){
                 $cache_status.= " (ttl: $ttl)";
             }
-            $_MEMCACHE->set($page_key, $document, 0, $ttl);
+            $success = $_MEMCACHE->set($page_key, $document, 0, $ttl);
+            if(!$success){
+                // failed sets do not remove previous values using this key
+                // so, we need to remove any objects with this key that currenlty exist
+                $_MEMCACHE->delete($page_key);
+            }
         } elseif($ttl<=0 && $REFRESH) {
             $_MEMCACHE->delete($page_key);
         }
