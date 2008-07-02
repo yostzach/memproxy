@@ -419,7 +419,7 @@ function fetch_document($path, $primary_request=false) {
             $out.= "Accept: ".$_SERVER["HTTP_ACCEPT"]."\r\n";
         }
 
-        if(isset($_SERVER["ACCEPT_CHARSET"])){
+        if(isset($_SERVER["HTTP_ACCEPT_CHARSET"])){
             $out.= "Accept-Charset: ".$_SERVER["HTTP_ACCEPT_CHARSET"]."\r\n";
         }
 
