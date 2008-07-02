@@ -172,7 +172,7 @@ documentation.
         "application" on an alternate port and point the backend.php script to
         that port on the same hostname.
 
-        If you can listen on more than port 80, you could "in theory" have
+        If you can't listen on more than port 80, you could "in theory" have
         MemProxy answer all requests that don't contain a certainUser-Agent
         and then alter the MemProxy User-Agent to match it.
 
