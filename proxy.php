@@ -594,6 +594,8 @@ function fetch_document($path, $primary_request=false) {
                     // is this cacheable for others?
                     if(strpos($value, "private")!==false){
                         $document["private"] = true;
+                        $ttl = 0;
+                        $proxy_ttl = 0;
                     }
                     break;
 
