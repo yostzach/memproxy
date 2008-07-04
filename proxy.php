@@ -79,7 +79,7 @@ define("DEAD_RETRY", 30);
 
 
 // change to show debug output
-define("DEBUG", true);
+define("DEBUG", false);
 
 // don't allow direct access
 if(strstr($_SERVER["REQUEST_URI"], basename(__FILE__))) return;
@@ -197,6 +197,17 @@ foreach($_MEMCACHE_SERVERS as $server){
 $_MEMCACHE->setCompressThreshold(10240);
 
 
+/**
+ * A second caching option:
+ *
+ * Instead of memcached, load the xcache object that
+ * emulates enough of the memcached interface.
+ *
+ * require_once "./contrib/XCache.php";
+ *
+ * $_MEMCACHE = new XCache;
+ *
+ */
 
 
 
@@ -224,9 +235,9 @@ if(empty($path)){
 //////////////////////////////////
 
 
+
 // start magic
 list($body, $content_type) = fetch_document($path, true);
-
 
 //////////////////////////////////
 // post-fetch plugins
@@ -317,15 +328,17 @@ function fetch_document($path, $primary_request=false) {
             }
 
             // calculate the cached time remaining
-            $current_ttl = $document["ttl"] - (time() - $document["accessed"]);
+            $current_ttl = $document["proxy_ttl"] - (time() - $document["accessed"]);
 
-            // send cache control headers
-            header("Cache-Control: max-age=$current_ttl");
-            header("Expires: ".gmdate("r", time()+$current_ttl));
-            header("Last-Modified: ".gmdate("r", $document["accessed"]));
+            // if the time the item will remain in proxy cache
+            // is greater than the document's non-proxy ttl,
+            // send the non-proxy ttl to the browser
+            if($current_ttl > $document["ttl"]){
+                $current_ttl = $document["ttl"];
+            }
 
             if(DEBUG) {
-                $cache_status = "Cache Hit (ttl: ".$current_ttl." accessed: ".$document["accessed"]." orig ttl: ".$document["ttl"].")";
+                $cache_status = "Cache Hit (ttl: ".$current_ttl." accessed: ".$document["accessed"]." orig ttl: ".$document["ttl"]." proxy ttl: ".$document["proxy_ttl"].")";
                 $debug.= $cache_status;
             }
 
@@ -335,9 +348,14 @@ function fetch_document($path, $primary_request=false) {
                 if($document["accessed"] <= $iftime){
                     header('HTTP/1.x 304 Not Modified');
                     header('Status: 304 Not Modified');
-                    return "";
+                    return array("", $document["content-type"]);
                 }
             }
+
+            // send cache control headers
+            header("Cache-Control: max-age=$current_ttl");
+            header("Expires: ".gmdate("r", time()+$current_ttl));
+            header("Last-Modified: ".gmdate("r", $document["accessed"]));
 
         }
 
@@ -552,7 +570,33 @@ function fetch_document($path, $primary_request=false) {
 
                 // store any cache control data for later use
                 case "cache-control":
-                    $ttl = (int)substr($value, strpos($value, "=")+1);
+                    // See RFC 2616 -
+                    // If a request includes the no-cache directive, it
+                    // SHOULD NOT include min-fresh, max-stale, or max-age.
+                    if(stripos($value, "no-cache")!==false){
+                        $document["no-cache"] = true;
+                        $ttl = 0;
+                        $proxy_ttl = 0;
+                    } elseif(preg_match('!max-age=(\d+)!i', $value, $match)){
+                        $ttl = (int)$match[1];
+                        $proxy_ttl = $ttl;
+                    }
+                    // should this be stored at all?  passed to client
+                    if(stripos($value, "no-store")!==false){
+                        $document["no-store"] = true;
+                        $ttl = 0;
+                        $proxy_ttl = 0;
+                    }
+                    // RFC 2616 does not specify if s-maxage is valid or not
+                    // when no-cache is set.  It should be prefered over max-age
+                    // for a proxy.
+                    if(preg_match('!s-maxage=(\d+)!i', $value, $match)){
+                        $proxy_ttl = (int)$match[1];
+                    }
+                    // is this cacheable for others?
+                    if(strpos($value, "private")!==false){
+                        $document["private"] = true;
+                    }
                     break;
 
                 // store any proxy directives for later use
@@ -588,6 +632,7 @@ function fetch_document($path, $primary_request=false) {
 
         // if no ttl is provided, the content is assumed static for one hour
         if(!isset($ttl)) $ttl = DEFAULT_TTL;
+        if(!isset($proxy_ttl)) $proxy_ttl = DEFAULT_TTL;
 
         // set cache status to indicate the page did not want to be cached
         if(DEBUG && $primary_request && $ttl==0){
@@ -601,20 +646,25 @@ function fetch_document($path, $primary_request=false) {
 
         // set document ttl in cache
         $document["ttl"] = $ttl;
+        $document["proxy_ttl"] = $proxy_ttl;
 
         // send cache control header
         if($primary_request && $document["content-type"]){
-            header("Cache-Control: max-age=$ttl");
+            $cache_control = "Cache-Control: max-age=$ttl";
+            if($document["no-cache"]) $cache_control.= ",no-cache";
+            if($document["no-store"]) $cache_control.= ",no-store";
+            if($document["private"]) $cache_control.= ",private";
+            header($cache_control);
             header("Expires: ".gmdate("r", time()+$ttl));
             header("Last-Modified: ".gmdate("r"));
         }
 
         // if the page did not set its cache time to 0, put it in cache
-        if($ttl>0 && !$NOCACHE){
+        if($proxy_ttl>0 && !$NOCACHE){
             if(DEBUG){
                 $cache_status.= " (ttl: $ttl)";
             }
-            $success = $_MEMCACHE->set($page_key, $document, 0, $ttl);
+            $success = $_MEMCACHE->set($page_key, $document, 0, $proxy_ttl);
             if(!$success){
                 // failed sets do not remove previous values using this key
                 // so, we need to remove any objects with this key that currenlty exist
