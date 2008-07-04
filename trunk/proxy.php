@@ -586,11 +586,9 @@ function fetch_document($path, $primary_request=false) {
                         $document["no-store"] = true;
                         $ttl = 0;
                         $proxy_ttl = 0;
-                    }
-                    // RFC 2616 does not specify if s-maxage is valid or not
-                    // when no-cache is set.  It should be prefered over max-age
-                    // for a proxy.
-                    if(preg_match('!s-maxage=(\d+)!i', $value, $match)){
+                    } elseif(preg_match('!s-maxage=(\d+)!i', $value, $match)){
+                        // RFC 2616 does not specify if s-maxage is valid or not
+                        // when no-cache is set.  But, no-store is quite clear.
                         $proxy_ttl = (int)$match[1];
                     }
                     // is this cacheable for others?
