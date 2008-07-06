@@ -79,7 +79,7 @@ define("DEAD_RETRY", 30);
 
 
 // change to show debug output
-define("DEBUG", false);
+define("DEBUG", true);
 
 // don't allow direct access
 if(strstr($_SERVER["REQUEST_URI"], basename(__FILE__))) return;
@@ -135,6 +135,10 @@ if(DEBUG || strpos($_SERVER["REMOTE_ADDR"], "10.1.")==0){
         $command = $match[1];
 
         switch($command) {
+
+            case "delete":
+                $DELETE = true;
+                break;
 
             case "nodata":
                 $NODATA = true;
@@ -293,7 +297,7 @@ return;
 
 function fetch_document($path, $primary_request=false) {
 
-    global $_MEMCACHE, $NODATA, $NOCACHE, $REFRESH, $debug, $cache_status;
+    global $_MEMCACHE, $NODATA, $NOCACHE, $REFRESH, $DELETE, $debug, $cache_status;
 
     // init document
     $document = false;
@@ -303,6 +307,11 @@ function fetch_document($path, $primary_request=false) {
     // if the key is over 250, we need to make it shorter as best we can
     if(strlen($page_key) > 250){
         $page_key = substr($page_key, 0, 210).sha1(substr($page_key, 211));
+    }
+
+    if($DELETE){
+        $_MEMCACHE->delete($page_key);
+        return array("item $path deleted", "text/plain");
     }
 
     // only cache GET requests
@@ -460,11 +469,13 @@ function fetch_document($path, $primary_request=false) {
         $headers = array();
         $status = "";
         $cookies = array();
+header("Content-Type: text/plain");
 
         // read headers
         $data = "";
         while($data!="\r\n") {
             $data = fgets($fp, 1024);
+
             if($data=="\r\n") break;
             if(empty($status)){
                 // first line if the HTTP status
@@ -485,16 +496,25 @@ function fetch_document($path, $primary_request=false) {
             }
         }
 
+        $document["body"] = "";
+
         if(isset($headers["transfer-encoding"]) && $headers["transfer-encoding"]=="chunked"){
-            // read chunked data
+
+            // parse chunked body data
             $data = fgets($fp, 1024);
             $size = hexdec(trim($data));
+
             while($size!=0){
                 $buff = "";
                 while(!feof($fp) && strlen($buff)<$size){
                     $buff.= fread($fp, $size - strlen($buff));
                 }
+
                 $document["body"].= $buff;
+
+                // read off \r\n
+                fread($fp, 2);
+
                 $data = fgets($fp, 1024);
                 $size = hexdec(trim($data));
             }
@@ -664,6 +684,7 @@ function fetch_document($path, $primary_request=false) {
             if(DEBUG){
                 $cache_status.= " (ttl: $ttl)";
             }
+
             $success = $_MEMCACHE->set($page_key, $document, 0, $proxy_ttl);
             if(!$success){
                 // failed sets do not remove previous values using this key
