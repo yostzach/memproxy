@@ -1,0 +1,339 @@
+MemProxy 0.1
+
+* Copyright (c) 2008, dealnews.com, Inc.
+* All rights reserved.
+* This application is subject to the BSD style license included
+* in this package.  See license.txt.
+
+MemProxy is a simple (bet very powerful) PHP script that proxies web requests
+and stores the contents in memcached.  By being a full proxy, it allows the
+proxy servers to avoid heavy application level code.  This makes it very fast
+and efficient.  It also allows for a very simple set up on dedicated proxy
+servers.  Configurations for Apache and nginx are included in this
+documentation.
+
+0. Requirements
+
+    * PHP 5.2 with the PECL/memcache extension.
+    * A web server that has rewrite abilities.
+      Apache and Nginx examples provided.
+    * memcached
+
+
+1. Configuration
+
+    1a. The backed.php configuration
+
+        This is where you configure what application servers the proxy will
+        contact.  MemProxy is capable of dealing with multiple domains within
+        one installation.  The configuration in this case is a PHP array.
+
+        $backend_array = array(
+
+            "www.example.com" =>
+                array(
+                    array("app1.example.com", 80),
+                    array("app2.example.com", 80),
+                    array("app3.example.com", 80),
+                ),
+
+            "another.example.com" =>
+                array(
+                    array("app1.example.com", 8080),
+                    array("app2.example.com", 8080),
+                    array("app3.example.com", 8080),
+                ),
+        );
+
+        In the above example, the keys of the array (www.example.com and
+        another.example.com) are the host names of the sites we want to
+        proxy.  MemProxy will be using the HTTP_HOST aka Host: header sent
+        by the clients to determine this.  This works much like name based
+        virutal hosting.
+
+        Each host points to an array of backend servers that will be used to
+        fulfill requests.  You should proved the backend name/ip and a port.
+        Both values are required.
+
+        backend.php will need to be in the same directory as proxy.php which
+        we will configure next.
+
+    1b. Memcached
+
+        backend.php is the only file that is included by proxy.php.  This is
+        done for speed reasons.  We actually store the backend.php
+        configuration in memcached. File I/O or even stats done by opcode
+        caches can slow down the code.  You could even move backend.php into
+        proxy.php if you wanted to improve performance.
+
+        So, having said that, you will find the memcached configuration inside
+        the proxy.php script.  Again, this is a PHP array.  It can be as simple
+        as an IP list or can provide ports and weights.
+
+            // Simple ip list
+            $_MEMCACHE_SERVERS = array(
+                "10.1.1.1",
+                "10.1.1.2"
+            );
+
+            // Extended setup
+            // IP, Port, Weight
+            $_MEMCACHE_SERVERS = array(
+                array("10.1.1.1", 11211, 1),
+                array("10.1.1.2", 11211, 2),
+            );
+
+    1c. xcache
+
+        If you have just one server, xcache may be a better choice for speed
+        reasons.  xcache is primarily used as an opcode cache for PHP.  In
+        fact, to get the most out of MemProxy, you should be using an opcode
+        cache already.  xcache also offers an API to allow data storage within
+        the the shared process memory.  If you are using xcache and have just
+        one server, simply comment out or remove the memcached configuration
+        and uncomment the xcache configuration in proxy.php.  It looks like:
+
+            require_once "./contrib/XCache.php";
+
+            $_MEMCACHE = new XCache;
+
+
+    1d. Configurable constants
+
+        You will find some constants at the top of the proxy.php script.
+        These can be changed if you wish.
+
+        DEFAULT_TTL - The default ttl in seconds for any content that does not
+                      provide a ttl in its headers.  Default 300 seconds.
+
+        DEAD_RETRY  - The amount of time in seconds that must pass before a
+                      backend server marked as down will be retried.  Default
+                      is 30 seconds.
+
+        DEBUG       - Toggle's debug mode.  Default false.  See section 5 for
+                      more information.
+
+
+2. Full Proxy Installation
+
+    This installation assumes that the proxy is running on separate
+    hardware from the application servers.  This is the setup that the
+    code was originally developed for.
+
+    For what it is worth, nginx with xcache (for opcode and/or storage)
+    has shown to be the fastest way to run MemProxy.
+
+    2a. Apache Setup
+
+        Create a new VirtualHost for the proxy to live in.
+
+        <VirtualHost 10.1.1.1>
+
+          ServerName www.example.com
+          ServerAlias another.example.com
+
+          DocumentRoot /var/www/proxy
+
+          RewriteEngine On
+          RewriteRule ^.*$ /proxy.php [L]
+
+        </VirtualHost>
+
+        We then place the proxy.php and backend.php scripts in the dir we
+        list under DocumentRoot.  Here it is named /var/www/proxy.
+
+        The rewrite above will rewrite all requests for this virtual host to
+        the proxy.php script.  It will answer all requests.  You can alter
+        this rewrite as you see fit for your servers.
+
+    2b. Nginx Setup
+
+        ** This does not cover setting up PHP with Nginx.  You should be using
+           the FastCGI interface for this example to work.
+
+        ** FYI, there is a memcached module for nginx.  This application does
+           not involve that module.  However, if anyone wants to figure out
+           how to use it, that would be cool.  It may make this even faster.
+
+        The below example is a full server definition within nginx.  The
+        important part is the 'location /' section.
+
+        # Defining web server
+        server {
+            listen 10.1.1.1:80;
+            server_name www.example.com;
+
+            # All dynamic requests will go here
+            location / {
+
+                default_type text/html;
+
+                root  /var/www/proxy;
+
+                # Rewrite all requests to the proxy script accept
+                # requests for the script itself.  Otherwise it
+                # will cause a loop.
+                if ($request_filename !~ proxy.php) {
+                    rewrite  ^(.*)$  /proxy.php  last;
+                    break;
+                }
+            }
+
+            # Some more config here like the PHP FastCGI config
+        }
+
+
+    2c. Alternate setups
+
+        You can be creative if you like and do other things.  That is left to
+        your imagination.  If you only have one server you could set up your
+        "application" on an alternate port and point the backend.php script to
+        that port on the same hostname.
+
+        If you can't listen on more than port 80, you could "in theory" have
+        MemProxy answer all requests that don't contain a certainUser-Agent
+        and then alter the MemProxy User-Agent to match it.
+
+        And there are more surely.  Its original intent was to live on separate
+        hardware.  So, that is all that is covered in this document.
+
+
+3. Setting TTLs on your application.
+
+    MemProxy recognizes several of the standard Cache-Control header options.
+
+    Example:
+
+        Cache-Control: max-age=300
+
+    This directive would tell MemProxy to keep the content in memcached for
+    300 seconds.  MemProxy would also communicate this value to the end
+    client.  This value is stored in the memached data and will decrease as
+    the cache is closer to expiring.
+
+    Additional options for Cache-Control are recognized.
+
+        no-cache - max-age will be ignored.  The client will be sent the
+                   the no-cache command.  However, the object may still
+                   be stored in the proxy cache.  See s-maxage below.
+
+        no-store - The object will not be stored in the proxy cache and
+                   the no-store command will be sent to the client.  This
+                   is a sure fire way to ensure something is not cached.
+
+        s-maxage - If set, s-maxage will be used for the ttl for cached
+                   data within MemProxy.  It does not affect the cache headers
+                   sent to the client.  This is prefered over max-age for
+                   proxy storage and is not affected by no-cache.  no-store
+                   however, will override s-maxage.
+
+        private  - Private indicates that an item should not be cached as it
+                   is solely for the requesting client.  It will not be cached
+                   and the private command along with a max-age=0 will be sent
+                   to the client.  The private command is very specific and is
+                   meant to indicate that a copy of the data should be disposed
+                   of as soon as the client is done with it.
+
+
+    Ok, confused yet?  The main reason these were implemented is to allow the
+    application to specify that an item should be cached by the proxy, but
+    either should not be cached by the client or should be cached for a short
+    time by the client.
+
+    For example, if you have an object that rarely changes, but it is very
+    important that the clients get the updates when they do occur, you could
+    set s-maxage to one hour, but set max-age to just 2 minutes.  This way,
+    the clients would check for a new version over 2 minutes, but would get
+    the cached copy.  In fact, they would like receive a 304 Not Modifed
+    response.  That would not send any data down, saving you bandwidth.
+    Likewise, you could set no-cache and s-maxage of 5 minutes so that the
+    client would check the proxy every time the page was reloaded.  MemProxy
+    would respond accordingly without hitting your application servers.
+
+
+    PHP Examples:
+
+        // max-age only
+        header("Cache-Control: max-age=300");
+
+        // max-age and s-maxage
+        header("Cache-Control: max-age=60,s-maxage=300");
+
+        // no client cache, but proxy will cache
+        header("Cache-Control: max-age=0,s-maxage=300");
+        // or
+        header("Cache-Control: no-cache,s-maxage=300");
+
+        // no proxy or client cache
+        header("Cache-Control: no-store");
+        header("Cache-Control: private");
+
+
+    To have a piece of content never by cached, simple set the max-age to 0.
+    There is currently no way to have an object stored forever.
+
+
+4. Sending commands to the proxy.
+
+    MemProxy can accept some basic commands via the URI.  To send the commands,
+    place a special string at the start of the request URI.  Example:
+
+    http://www.example.com/proxy:refresh/index.html
+
+    This URL would refresh the cache of http://www.example.com/index.html
+
+    4a. Available commands:
+
+        proxy:refresh
+
+        This will refresh the cache of the specified URI.  The best practice
+        is to use logical TTLs and not script this to happen.
+
+        proxy:nocache
+
+        This will deliver back a non-cached version of the content.  This data
+        will not be cached.  This is handy for checking changes on the
+        application layer before the cache is refreshed.
+
+        proxy:nodata
+
+        This will simply make a normal request, however, no data will be
+        returned to the end client.  This is similar to a HEAD request.  This
+        could be used on an interval to ensure a particular piece of content
+        is in cache.
+
+        proxy:refresh-nodata
+
+        This is mixture of refresh and nodata.  It refreshes the cache, but
+        does not return the data.  Again, this is mostly useful in server side
+        process to ensure cache is fresh.  You really should use TTLs for this,
+        but there may be some piece of cache you want refreshed out of its
+        normal schedule.  The best practice is to use this sparingly.
+
+        proxy:delete
+
+        This will delete the content at the specified URI from the cache.
+        It may be useful in server side processes.  proxy:refresh is likely
+        more desirable.  But, this could be useful if the object no longer
+        exists in the backend.
+
+        proxy:global
+
+        For debugging the application, when DEBUG is true, you can have the
+        PHP script print out the contents of the $GLOBALS variable.
+
+
+5. Debug information.
+
+    If you set DEBUG to true in proxy.php, you will get some extra information
+    in headers and as output.
+
+    The X-Cache-Status header will be sent to the clients.  It will state
+    whether the content came from cache or not.  It will also state ttl
+    information.
+
+    Also, for HTML documents, you will see a small snippet of output at the end
+    of the document detailing cache hit or miss and other information of
+    interest.
+
+
