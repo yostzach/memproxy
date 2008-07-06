@@ -83,7 +83,22 @@ documentation.
                 array("10.1.1.2", 11211, 2),
             );
 
-    1c. Configurable constants
+    1c. xcache
+
+        If you have just one server, xcache may be a better choice for speed
+        reasons.  xcache is primarily used as an opcode cache for PHP.  In
+        fact, to get the most out of MemProxy, you should be using an opcode
+        cache already.  xcache also offers an API to allow data storage within
+        the the shared process memory.  If you are using xcache and have just
+        one server, simply comment out or remove the memcached configuration
+        and uncomment the xcache configuration in proxy.php.  It looks like:
+
+            require_once "./contrib/XCache.php";
+
+            $_MEMCACHE = new XCache;
+
+
+    1d. Configurable constants
 
         You will find some constants at the top of the proxy.php script.
         These can be changed if you wish.
@@ -104,6 +119,9 @@ documentation.
     This installation assumes that the proxy is running on separate
     hardware from the application servers.  This is the setup that the
     code was originally developed for.
+
+    For what it is worth, nginx with xcache (for opcode and/or storage)
+    has shown to be the fastest way to run MemProxy.
 
     2a. Apache Setup
 
@@ -182,7 +200,7 @@ documentation.
 
 3. Setting TTLs on your application.
 
-    MemProxy recognizes the standard Cache-Control header's max-age directive.
+    MemProxy recognizes several of the standard Cache-Control header options.
 
     Example:
 
@@ -193,9 +211,63 @@ documentation.
     client.  This value is stored in the memached data and will decrease as
     the cache is closer to expiring.
 
-    PHP Example:
+    Additional options for Cache-Control are recognized.
 
+        no-cache - max-age will be ignored.  The client will be sent the
+                   the no-cache command.  However, the object may still
+                   be stored in the proxy cache.  See s-maxage below.
+
+        no-store - The object will not be stored in the proxy cache and
+                   the no-store command will be sent to the client.  This
+                   is a sure fire way to ensure something is not cached.
+
+        s-maxage - If set, s-maxage will be used for the ttl for cached
+                   data within MemProxy.  It does not affect the cache headers
+                   sent to the client.  This is prefered over max-age for
+                   proxy storage and is not affected by no-cache.  no-store
+                   however, will override s-maxage.
+
+        private  - Private indicates that an item should not be cached as it
+                   is solely for the requesting client.  It will not be cached
+                   and the private command along with a max-age=0 will be sent
+                   to the client.  The private command is very specific and is
+                   meant to indicate that a copy of the data should be disposed
+                   of as soon as the client is done with it.
+
+
+    Ok, confused yet?  The main reason these were implemented is to allow the
+    application to specify that an item should be cached by the proxy, but
+    either should not be cached by the client or should be cached for a short
+    time by the client.
+
+    For example, if you have an object that rarely changes, but it is very
+    important that the clients get the updates when they do occur, you could
+    set s-maxage to one hour, but set max-age to just 2 minutes.  This way,
+    the clients would check for a new version over 2 minutes, but would get
+    the cached copy.  In fact, they would like receive a 304 Not Modifed
+    response.  That would not send any data down, saving you bandwidth.
+    Likewise, you could set no-cache and s-maxage of 5 minutes so that the
+    client would check the proxy every time the page was reloaded.  MemProxy
+    would respond accordingly without hitting your application servers.
+
+
+    PHP Examples:
+
+        // max-age only
         header("Cache-Control: max-age=300");
+
+        // max-age and s-maxage
+        header("Cache-Control: max-age=60,s-maxage=300");
+
+        // no client cache, but proxy will cache
+        header("Cache-Control: max-age=0,s-maxage=300");
+        // or
+        header("Cache-Control: no-cache,s-maxage=300");
+
+        // no proxy or client cache
+        header("Cache-Control: no-store");
+        header("Cache-Control: private");
+
 
     To have a piece of content never by cached, simple set the max-age to 0.
     There is currently no way to have an object stored forever.
@@ -214,7 +286,7 @@ documentation.
 
         proxy:refresh
 
-        This will refresh the cache of the specified URL.  The best practice
+        This will refresh the cache of the specified URI.  The best practice
         is to use logical TTLs and not script this to happen.
 
         proxy:nocache
@@ -237,6 +309,13 @@ documentation.
         process to ensure cache is fresh.  You really should use TTLs for this,
         but there may be some piece of cache you want refreshed out of its
         normal schedule.  The best practice is to use this sparingly.
+
+        proxy:delete
+
+        This will delete the content at the specified URI from the cache.
+        It may be useful in server side processes.  proxy:refresh is likely
+        more desirable.  But, this could be useful if the object no longer
+        exists in the backend.
 
         proxy:global
 
