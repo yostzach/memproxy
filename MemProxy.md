@@ -1,0 +1,257 @@
+A proxy application that caches data in memcached.
+
+# Introduction #
+
+MemProxy is a simple (but very powerful) PHP script that proxies web requests
+and stores the contents in memcached.  By being a full proxy, it allows the
+proxy servers to avoid heavy application level code.  This makes it very fast
+and efficient.  It also allows for a very simple set up on dedicated proxy
+servers.  Configurations for Apache and nginx are included in this
+documentation.
+
+# Requirements #
+
+  * PHP 5.2 with the PECL/memcache extension.
+  * A web server that has rewrite abilities. Apache and Nginx examples provided.
+  * memcached
+
+# Configuration #
+
+## The backed.php configuration ##
+
+This is where you configure what application servers the proxy will
+contact.  MemProxy is capable of dealing with multiple domains within
+one installation.  The configuration in this case is a PHP array.
+```
+$backend_array = array(
+
+    "www.example.com" =>
+        array(
+            array("app1.example.com", 80),
+            array("app2.example.com", 80),
+            array("app3.example.com", 80),
+        ),
+    
+    "another.example.com" =>
+        array(
+            array("app1.example.com", 8080),
+            array("app2.example.com", 8080),
+            array("app3.example.com", 8080),
+        ),
+);
+```
+In the above example, the keys of the array (www.example.com and
+another.example.com) are the host names of the sites we want to
+proxy.  MemProxy will be using the HTTP\_HOST aka Host: header sent
+by the clients to determine this.  This works much like name based
+virutal hosting.
+
+Each host points to an array of backend servers that will be used to
+fulfill requests.  You should proved the backend name/ip and a port.
+Both values are required.
+
+backend.php will need to be in the same directory as proxy.php which
+we will configure next.
+
+## Memcached ##
+
+backend.php is the only file that is included by proxy.php.  This is
+done for speed reasons.  We actually store the backend.php
+configuration in memcached. File I/O or even stats done by opcode
+caches can slow down the code.  You could even move backend.php into
+proxy.php if you wanted to improve performance.
+
+So, having said that, you will find the memcached configuration inside
+the proxy.php script.  Again, this is a PHP array.  It can be as simple
+as an IP list or can provide ports and weights.
+```
+    // Simple ip list
+    $_MEMCACHE_SERVERS = array(
+        "10.1.1.1",
+        "10.1.1.2"
+    );
+    
+    // Extended setup
+    // IP, Port, Weight
+    $_MEMCACHE_SERVERS = array(
+        array("10.1.1.1", 11211, 1),
+        array("10.1.1.2", 11211, 2),
+    );
+```
+## Configurable constants ##
+
+You will find some constants at the top of the proxy.php script.
+These can be changed if you wish.
+
+**DEFAULT\_TTL**
+
+The default ttl in seconds for any content that does not
+provide a ttl in its headers.  Default 300 seconds.
+
+**DEAD\_RETRY**
+
+The amount of time in seconds that must pass before a
+backend server marked as down will be retried.  Default
+is 30 seconds.
+
+**DEBUG**
+
+Toggle's debug mode.  Default false.  See section 5 for
+more information.
+
+
+# Full Proxy Installation #
+
+This installation assumes that the proxy is running on separate
+hardware from the application servers.  This is the setup that the
+code was originally developed for.
+
+## Apache Setup ##
+
+Create a new VirtualHost for the proxy to live in.
+```
+    <VirtualHost 10.1.1.1>
+    
+        ServerName www.example.com
+        ServerAlias another.example.com
+        
+        DocumentRoot /var/www/proxy
+        
+        RewriteEngine On
+        RewriteRule ^.*$ /proxy.php [L]
+    
+    </VirtualHost>
+```
+We then place the proxy.php and backend.php scripts in the dir we
+list under DocumentRoot.  Here it is named /var/www/proxy.
+
+The rewrite above will rewrite all requests for this virtual host to
+the proxy.php script.  It will answer all requests.  You can alter
+this rewrite as you see fit for your servers.
+
+## Nginx Setup ##
+
+ This does not cover setting up PHP with Nginx.  You should be using
+the FastCGI interface for this example to work.
+
+ FYI, there is a memcached module for nginx.  This application does
+not involve that module.  However, if anyone wants to figure out
+how to use it, that would be cool.  It may make this even faster.
+
+The below example is a full server definition within nginx.  The
+important part is the 'location /' section.
+```
+    # Defining web server
+    server {
+        listen 10.1.1.1:80;
+        server_name www.example.com;
+        
+        # All dynamic requests will go here
+        location / {
+            
+            default_type text/html;
+            
+            root  /var/www/proxy;
+            
+            # Rewrite all requests to the proxy script accept
+            # requests for the script itself.  Otherwise it
+            # will cause a loop.
+            if ($request_filename !~ proxy.php) {
+                rewrite  ^(.*)$  /proxy.php  last;
+                break;
+            }
+        }
+        
+        # Some more config here like the PHP FastCGI config
+    }
+
+```
+## Alternate setups ##
+
+You can be creative if you like and do other things.  That is left to
+your imagination.  If you only have one server you could set up your
+"application" on an alternate port and point the backend.php script to
+that port on the same hostname.
+
+If you can listen on more than port 80, you could "in theory" have
+MemProxy answer all requests that don't contain a certainUser-Agent
+and then alter the MemProxy User-Agent to match it.
+
+And there are more surely.  Its original intent was to live on separate
+hardware.  So, that is all that is covered in this document.
+
+
+# Setting TTLs on your application #
+
+MemProxy recognizes the standard Cache-Control header's max-age directive.
+
+Example:
+```
+    Cache-Control: max-age=300
+```
+This directive would tell MemProxy to keep the content in memcached for
+300 seconds.  MemProxy would also communicate this value to the end
+client.  This value is stored in the memached data and will decrease as
+the cache is closer to expiring.
+
+PHP Example:
+```
+    header("Cache-Control: max-age=300");
+```
+If a particular piece of content should not be cached, set themax-age to 0.  There is currently no way to have an object stored forever.
+
+# Sending commands to the proxy #
+
+MemProxy can accept some basic commands via the URI.  To send the commands,
+place a special string at the start of the request URI.  Example:
+
+http://www.example.com/proxy:refresh/index.html
+
+This URL would refresh the cache of http://www.example.com/index.html
+
+## Available commands ##
+
+**proxy:refresh**
+
+This will refresh the cache of the specified URL.  The best practice
+is to use logical TTLs and not script this to happen.
+
+**proxy:nocache**
+
+This will deliver back a non-cached version of the content.  This data
+will not be cached.  This is handy for checking changes on the
+application layer before the cache is refreshed.
+
+**proxy:nodata**
+
+This will simply make a normal request, however, no data will be
+returned to the end client.  This is similar to a HEAD request.  This
+could be used on an interval to ensure a particular piece of content
+is in cache.
+
+**proxy:refresh-nodata**
+
+This is mixture of refresh and nodata.  It refreshes the cache, but
+does not return the data.  Again, this is mostly useful in server side
+process to ensure cache is fresh.  You really should use TTLs for this,
+but there may be some piece of cache you want refreshed out of its
+normal schedule.  The best practice is to use this sparingly.
+
+**proxy:global**
+
+For debugging the application, when DEBUG is true, you can have the
+PHP script print out the contents of the $GLOBALS variable.
+
+
+# Debug information #
+
+If you set DEBUG to true in proxy.php, you will get some extra information
+in headers and as output.
+
+The X-Cache-Status header will be sent to the clients.  It will state
+whether the content came from cache or not.  It will also state ttl
+information.
+
+Also, for HTML documents, you will see a small snippet of output at the end
+of the document detailing cache hit or miss and other information of
+interest.
